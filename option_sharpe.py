@@ -38,7 +38,12 @@ def get_user_input():
     
     # Get expiry date
     while True:
-        expiry = input("Enter option expiration date (YYYY-MM-DD): ").strip()
+        expiry = input("Enter option expiration date (YYYY-MM-DD) or press Enter for today: ").strip()
+        if not expiry:
+            # Use today's date if no input provided
+            expiry = datetime.today().strftime('%Y-%m-%d')
+            print(f"Using today's date: {expiry}")
+        
         try:
             datetime.strptime(expiry, '%Y-%m-%d')
             config['expiry'] = expiry
@@ -101,6 +106,7 @@ def get_user_input():
                 continue
                 
             config['cache_dir'] = str(cache_path)
+            print(f"✅ Using cache directory: {cache_path}")
             break
             
         except Exception as e:
@@ -135,10 +141,10 @@ def initialize_clients(config: Dict):
 
 def construct_option_ticker(ticker: str, expiry: str, strike: float, option_type: str) -> str:
     """
-    Construct the option ticker symbol in the format: O:SPY251219C00650000
+    Construct the option ticker symbol in the format: O:AAPL250417C00120000
     
     Args:
-        ticker (str): Base ticker symbol (e.g., 'SPY')
+        ticker (str): Base ticker symbol (e.g., 'AAPL')
         expiry (str): Expiration date in YYYY-MM-DD format
         strike (float): Strike price
         option_type (str): 'C' for Call or 'P' for Put
@@ -156,6 +162,10 @@ def construct_option_ticker(ticker: str, expiry: str, strike: float, option_type
     
     # Construct the option ticker
     option_ticker = f"O:{ticker}{expiry_str}{option_type}{strike_str}"
+    
+    # Log the constructed ticker for debugging
+    logger.info(f"Constructed option ticker: {option_ticker}")
+    
     return option_ticker
 
 class RateLimitedClient:
@@ -290,6 +300,11 @@ def get_option_historical_data(ticker: str, from_date: str, to_date: str) -> Lis
         return cached_data
 
     try:
+        logger.info(f"Fetching data for ticker: {ticker} from {from_date} to {to_date}")
+        
+        # Log the API request details
+        logger.info(f"API Request: get_aggs(ticker={ticker}, multiplier=1, timespan='day', from_={from_date}, to={to_date}, adjusted=True, sort='asc', limit=120)")
+        
         aggs = []
         iterator = client.get_aggs(
             ticker=ticker,
@@ -310,6 +325,7 @@ def get_option_historical_data(ticker: str, from_date: str, to_date: str) -> Lis
             })
             
         if aggs:
+            logger.info(f"Successfully retrieved {len(aggs)} data points")
             cache.set(cache_key, aggs)
             return aggs
         
@@ -355,9 +371,38 @@ def main():
         to_date = datetime.today().strftime('%Y-%m-%d')
         from_date = (datetime.today() - timedelta(days=config['days_back'])).strftime('%Y-%m-%d')
 
+        print(f"\n📅 Date Range: {from_date} to {to_date}")
         logger.info(f"Fetching historical data from {from_date} to {to_date}")
+        
+        # For debugging, let's also try with the known working option
+        known_option = "O:AAPL250417C00120000"
+        if option_symbol != known_option:
+            logger.info(f"Also trying with known working option: {known_option}")
+            test_data = get_option_historical_data(known_option, from_date, to_date)
+            if test_data:
+                logger.info(f"Successfully retrieved {len(test_data)} data points for test option")
+            else:
+                logger.warning("Failed to retrieve data for test option")
+        
         historical_data = get_option_historical_data(option_symbol, from_date, to_date)
 
+        if not historical_data:
+            logger.error("No historical data available for the specified period.")
+            
+            # Suggest a valid option
+            print("\n❌ No data available for the specified option.")
+            print("💡 Try using one of these known working options:")
+            print(f"  - {known_option} (AAPL Call option with strike 120 expiring 2025-04-17)")
+            
+            # Ask if user wants to try with the known option
+            try_known = input("\nWould you like to analyze the known working option instead? (y/n): ").strip().lower()
+            if try_known == 'y':
+                print(f"\nAnalyzing {known_option} instead...")
+                historical_data = get_option_historical_data(known_option, from_date, to_date)
+                option_symbol = known_option
+            else:
+                return
+        
         if not historical_data:
             logger.error("No historical data available for the specified period.")
             return
