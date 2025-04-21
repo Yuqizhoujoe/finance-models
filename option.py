@@ -14,6 +14,7 @@ from data.metrics import (
     format_percentage
 )
 from data.visualization import plot_price_history
+from data.contexts import print_context
 from utils.input_handler import get_user_input
 
 # Setup logging for debug purposes only
@@ -63,7 +64,7 @@ def main():
     
     # Get historical data for both option and stock
     print("\n📈 Fetching and analyzing data...")
-    option_df, stock_df, divergence = analyze_stock_and_option(
+    option_df, stock_df, divergence, volatility_analysis, vix_analysis = analyze_stock_and_option(
         client, 
         option_symbol, 
         config['ticker'], 
@@ -88,11 +89,9 @@ def main():
         print(f"Sharpe Ratio: {option_metrics['sharpe_ratio']:.2f}")
         print(f"Rating: {sharpe_rating}")
         print(f"Interpretation: {sharpe_explanation}")
-        print("\nOption Performance Context:")
-        print("• Negative ratios common due to time decay")
-        print("• Higher volatility than stocks expected")
-        print("• Short-term options: more extreme ratios")
-        print("• LEAPS: ratios closer to stock levels")
+        
+        # Print option performance context
+        print_context('option_performance', emoji="📊")
         
         print(f"\nReturns Analysis:")
         print(f"Average Daily Return: {format_percentage(option_metrics['avg_return'])}")
@@ -112,10 +111,9 @@ def main():
         print(f"Sharpe Ratio: {stock_metrics['sharpe_ratio']:.2f}")
         print(f"Rating: {stock_sharpe_rating}")
         print(f"Interpretation: {stock_sharpe_explanation}")
-        print("\nStock Performance Context:")
-        print("• S&P 500 typical: 0.4-0.5")
-        print("• Average stock: 0.3-0.4")
-        print("• Top performers: 0.7-1.0")
+        
+        # Print stock performance context
+        print_context('stock_performance', emoji="📈")
         
         print(f"\nReturns Analysis:")
         print(f"Average Daily Return: {format_percentage(stock_metrics['avg_return'])}")
@@ -146,6 +144,46 @@ def main():
                 print("\n💰 Selling Strategies:")
                 for strategy in divergence['selling_strategies']:
                     print(f"  • {strategy}")
+            
+            # Print divergence context
+            print_context('divergence', emoji="🔄")
+        
+        # Volatility Analysis Section
+        if volatility_analysis:
+            print_section("📊 Volatility Analysis")
+            print(f"Option Implied Volatility: {volatility_analysis['implied_volatility']:.2%}")
+            print(f"Option Realized Volatility: {volatility_analysis['realized_volatility']:.2%}")
+            print(f"Volatility Skew: {volatility_analysis['skew']:.2%}")
+            print(f"Skew Type: {volatility_analysis['skew_type']}")
+            print(f"\n📝 Interpretation:")
+            print(f"{volatility_analysis['interpretation']}")
+            
+            if volatility_analysis['buying_strategies']:
+                print("\n🛒 Buying Strategies:")
+                for strategy in volatility_analysis['buying_strategies']:
+                    print(f"  • {strategy}")
+                    
+            if volatility_analysis['selling_strategies']:
+                print("\n💰 Selling Strategies:")
+                for strategy in volatility_analysis['selling_strategies']:
+                    print(f"  • {strategy}")
+        
+        # VIX Analysis Section
+        if vix_analysis:
+            print_section("🌊 VIX Analysis")
+            print(f"Current VIX: {vix_analysis['current_vix']:.2f}")
+            print(f"VIX Level: {vix_analysis['vix_level'].capitalize()}")
+            print(f"VIX Trend: {vix_analysis['vix_trend'].capitalize()}")
+            print(f"\n📝 Interpretation:")
+            print(f"{vix_analysis['interpretation']}")
+            
+            if vix_analysis['trading_implications']:
+                print("\n💡 Trading Implications:")
+                for implication in vix_analysis['trading_implications']:
+                    print(f"  • {implication}")
+            
+            # Print VIX context
+            print_context('vix', emoji="🌊")
         
         # Plot the data
         print("\n📊 Generating price history plot...")

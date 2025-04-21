@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 import pandas as pd
 import yfinance as yf
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 
 from api_handlers.polygon_client import RateLimitedClient
 from data.technical_indicators import calculate_rsi, calculate_rsi_for_both, analyze_rsi_divergence
@@ -122,8 +122,164 @@ def get_stock_historical_data(ticker: str, from_date: str, to_date: str) -> Opti
         logger.error(f"Error getting stock historical data: {str(e)}")
         return None
 
+def get_option_implied_volatility(client: RateLimitedClient, option_symbol: str) -> Optional[float]:
+    """
+    Get the implied volatility for an option using Polygon API.
+    
+    Args:
+        client: Polygon API client
+        option_symbol: Option ticker symbol
+        
+    Returns:
+        Implied volatility as a decimal (e.g., 0.25 for 25%) or None if retrieval fails
+    """
+    try:
+        logger.info(f"Getting implied volatility for {option_symbol}")
+        
+        # Get option snapshot which includes implied volatility
+        snapshot = client.get_snapshot_option(option_contract=option_symbol)
+        
+        if not snapshot or not hasattr(snapshot, 'implied_volatility'):
+            logger.warning(f"No implied volatility data found for {option_symbol}")
+            return None
+            
+        # Convert to decimal (e.g., 25.5% -> 0.255)
+        iv = snapshot.implied_volatility / 100 if snapshot.implied_volatility else None
+        
+        logger.info(f"Implied volatility for {option_symbol}: {iv}")
+        return iv
+        
+    except Exception as e:
+        logger.error(f"Error getting implied volatility: {str(e)}")
+        return None
+
+def get_vix_data(from_date: str, to_date: str) -> Optional[pd.DataFrame]:
+    """
+    Get VIX data from Yahoo Finance.
+    
+    Args:
+        from_date: Start date in YYYY-MM-DD format
+        to_date: End date in YYYY-MM-DD format
+        
+    Returns:
+        DataFrame with VIX data or None if retrieval fails
+    """
+    logger.info(f"Fetching VIX data from Yahoo Finance from {from_date} to {to_date}...")
+    try:
+        vix = yf.Ticker("^VIX")
+        vix_df = vix.history(start=from_date, end=to_date, interval="1d")
+        logger.info(f"VIX data retrieved successfully")
+        return vix_df
+    except Exception as e:
+        logger.error(f"Error getting VIX data: {str(e)}")
+        return None
+
+def analyze_vix(vix_df: pd.DataFrame) -> Dict:
+    """
+    Analyze VIX data to gauge market sentiment.
+    
+    VIX Analysis Explanation:
+    ----------------------
+    The VIX (Volatility Index) is often called the "fear gauge" of the market.
+    It measures the market's expectation of volatility over the next 30 days.
+    
+    VIX Levels and Interpretation:
+    - VIX < 15: Market is calm, low fear
+    - VIX 15-25: Normal to slightly elevated volatility
+    - VIX > 25-30: High fear, possible market panic or correction
+    - VIX > 40: Extreme fear (often during crises or crashes)
+    
+    Trading Implications:
+    - Low VIX: Good time for premium selling strategies
+    - High VIX: Good time for buying options or hedging
+    - Rising VIX: Increasing market uncertainty
+    - Falling VIX: Decreasing market uncertainty
+    
+    Args:
+        vix_df: DataFrame with VIX data
+        
+    Returns:
+        Dictionary containing VIX analysis
+    """
+    try:
+        if vix_df is None or vix_df.empty:
+            return {
+                'current_vix': None,
+                'vix_level': 'unknown',
+                'interpretation': 'No VIX data available',
+                'trading_implications': []
+            }
+        
+        # Get current VIX value
+        current_vix = vix_df['Close'].iloc[-1]
+        
+        # Determine VIX level
+        if current_vix < 15:
+            vix_level = 'low'
+            interpretation = 'Market is calm with low fear. This environment typically favors premium selling strategies.'
+            trading_implications = [
+                'Consider selling premium through covered calls or cash-secured puts',
+                'Look for opportunities to write credit spreads',
+                'Be cautious of complacency - low VIX can precede market corrections'
+            ]
+        elif current_vix < 25:
+            vix_level = 'normal'
+            interpretation = 'Normal to slightly elevated volatility. Market sentiment is balanced.'
+            trading_implications = [
+                'Consider a mix of directional and volatility strategies',
+                'Look for opportunities in both premium selling and buying',
+                'Monitor for any sudden VIX spikes that might indicate changing sentiment'
+            ]
+        elif current_vix < 30:
+            vix_level = 'elevated'
+            interpretation = 'Elevated fear in the market. Possible market panic or correction ahead.'
+            trading_implications = [
+                'Consider buying protection through puts or inverse ETFs',
+                'Reduce position sizes and increase cash reserves',
+                'Look for opportunities to buy options when VIX starts to decline'
+            ]
+        else:
+            vix_level = 'extreme'
+            interpretation = 'Extreme fear in the market. Often seen during market crashes or crises.'
+            trading_implications = [
+                'Consider buying calls for a potential bounce when fear subsides',
+                'Look for oversold conditions to buy into weakness',
+                'Be prepared for continued volatility and avoid overleveraging'
+            ]
+        
+        # Check VIX trend (rising or falling)
+        vix_trend = 'neutral'
+        if len(vix_df) >= 5:
+            recent_vix = vix_df['Close'].iloc[-5:]
+            if all(recent_vix.iloc[i] <= recent_vix.iloc[i+1] for i in range(len(recent_vix)-1)):
+                vix_trend = 'rising'
+                interpretation += ' VIX is rising, indicating increasing market uncertainty.'
+                trading_implications.append('Consider reducing exposure or adding hedges as uncertainty increases.')
+            elif all(recent_vix.iloc[i] >= recent_vix.iloc[i+1] for i in range(len(recent_vix)-1)):
+                vix_trend = 'falling'
+                interpretation += ' VIX is falling, indicating decreasing market uncertainty.'
+                trading_implications.append('Consider increasing exposure as fear subsides.')
+        
+        return {
+            'current_vix': current_vix,
+            'vix_level': vix_level,
+            'vix_trend': vix_trend,
+            'interpretation': interpretation,
+            'trading_implications': trading_implications
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing VIX: {str(e)}")
+        return {
+            'current_vix': None,
+            'vix_level': 'error',
+            'vix_trend': 'unknown',
+            'interpretation': 'Error analyzing VIX data',
+            'trading_implications': []
+        }
+
 def analyze_stock_and_option(client: RateLimitedClient, option_ticker: str, stock_ticker: str, 
-                            from_date: str, to_date: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[dict]]:
+                            from_date: str, to_date: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[dict], Optional[dict], Optional[dict]]:
     """
     Analyze both the option and its underlying stock, including RSI calculation and divergence analysis.
     
@@ -135,7 +291,7 @@ def analyze_stock_and_option(client: RateLimitedClient, option_ticker: str, stoc
         to_date: End date in YYYY-MM-DD format
         
     Returns:
-        Tuple of (option DataFrame, stock DataFrame, divergence analysis) or (None, None, None) if retrieval fails
+        Tuple of (option DataFrame, stock DataFrame, divergence analysis, volatility analysis, vix analysis) or (None, None, None, None, None) if retrieval fails
     """
     try:
         logger.info(f"Starting analysis of option {option_ticker} and stock {stock_ticker}")
@@ -146,9 +302,12 @@ def analyze_stock_and_option(client: RateLimitedClient, option_ticker: str, stoc
         # Get stock data from Yahoo Finance
         stock_df = get_stock_historical_data(stock_ticker, from_date, to_date)
         
+        # Get VIX data
+        vix_df = get_vix_data(from_date, to_date)
+        
         if option_df is None or stock_df.empty:
             logger.error("Failed to retrieve data for option or stock")
-            return None, None, None
+            return None, None, None, None, None
         
         # Rename columns to match our standard format
         stock_df.rename(columns={
@@ -214,8 +373,50 @@ def analyze_stock_and_option(client: RateLimitedClient, option_ticker: str, stoc
             for strategy in divergence['selling_strategies']:
                 logger.info(f"  - {strategy}")
         
-        return option_df, stock_df, divergence
+        # Get implied volatility
+        implied_volatility = get_option_implied_volatility(client, option_ticker)
+        
+        # Calculate realized volatility of the option (not the stock)
+        volatility_analysis = None
+        if implied_volatility is not None and option_df is not None:
+            from data.technical_indicators import calculate_realized_volatility, analyze_volatility_skew
+            realized_volatility = calculate_realized_volatility(option_df)
+            volatility_analysis = analyze_volatility_skew(implied_volatility, realized_volatility)
+            
+            logger.info(f"Volatility Analysis:")
+            logger.info(f"Option Implied Volatility: {implied_volatility:.2%}")
+            logger.info(f"Option Realized Volatility: {realized_volatility:.2%}")
+            logger.info(f"Volatility Skew: {volatility_analysis['skew']:.2%}")
+            logger.info(f"Interpretation: {volatility_analysis['interpretation']}")
+            
+            if volatility_analysis['buying_strategies']:
+                logger.info("Buying Strategies:")
+                for strategy in volatility_analysis['buying_strategies']:
+                    logger.info(f"  - {strategy}")
+                    
+            if volatility_analysis['selling_strategies']:
+                logger.info("Selling Strategies:")
+                for strategy in volatility_analysis['selling_strategies']:
+                    logger.info(f"  - {strategy}")
+        
+        # Analyze VIX
+        vix_analysis = None
+        if vix_df is not None:
+            vix_analysis = analyze_vix(vix_df)
+            
+            logger.info(f"VIX Analysis:")
+            logger.info(f"Current VIX: {vix_analysis['current_vix']:.2f}")
+            logger.info(f"VIX Level: {vix_analysis['vix_level']}")
+            logger.info(f"VIX Trend: {vix_analysis['vix_trend']}")
+            logger.info(f"Interpretation: {vix_analysis['interpretation']}")
+            
+            if vix_analysis['trading_implications']:
+                logger.info("Trading Implications:")
+                for implication in vix_analysis['trading_implications']:
+                    logger.info(f"  - {implication}")
+        
+        return option_df, stock_df, divergence, volatility_analysis, vix_analysis
         
     except Exception as e:
         logger.error(f"Error analyzing option and stock: {str(e)}")
-        return None, None, None
+        return None, None, None, None, None

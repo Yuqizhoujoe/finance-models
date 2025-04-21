@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -223,6 +223,148 @@ def analyze_rsi_divergence(option_df: pd.DataFrame, stock_df: pd.DataFrame) -> d
             'rsi_difference': None,
             'divergence_type': 'error',
             'interpretation': 'Error analyzing divergence',
+            'buying_strategies': [],
+            'selling_strategies': []
+        }
+
+def calculate_realized_volatility(df: pd.DataFrame, window: int = 252, annualize: bool = True) -> float:
+    """
+    Calculate the realized volatility from historical price data.
+    
+    Realized Volatility Explanation:
+    ------------------------------
+    Realized volatility (also known as historical volatility) measures the actual price fluctuations
+    of an asset over a specific period. It's calculated using the standard deviation of daily returns.
+    
+    Formula:
+    1. Calculate daily returns: (Price_t / Price_t-1) - 1
+    2. Calculate standard deviation of returns
+    3. Annualize by multiplying by sqrt(trading days per year)
+    
+    Interpretation:
+    - Higher realized volatility indicates more price fluctuation
+    - Lower realized volatility indicates more stable price movement
+    - Often compared to implied volatility to identify mispricings
+    
+    Args:
+        df: DataFrame containing price data
+        window: Number of days to use for calculation (default: 252 trading days)
+        annualize: Whether to annualize the result (default: True)
+        
+    Returns:
+        Realized volatility as a decimal (e.g., 0.25 for 25%)
+    """
+    try:
+        # Make sure we have enough data
+        if len(df) < window:
+            logger.warning(f"Not enough data for realized volatility calculation. Using all available data ({len(df)} days)")
+            window = len(df)
+        
+        # Calculate daily returns if not already present
+        if 'daily_return' not in df.columns:
+            df['daily_return'] = df['close'].pct_change()
+        
+        # Calculate standard deviation of returns
+        std_dev = df['daily_return'].std()
+        
+        # Annualize if requested
+        if annualize:
+            # Assuming 252 trading days per year
+            realized_vol = std_dev * np.sqrt(252)
+        else:
+            realized_vol = std_dev
+        
+        return realized_vol
+        
+    except Exception as e:
+        logger.error(f"Error calculating realized volatility: {str(e)}")
+        return 0.0
+
+def analyze_volatility_skew(implied_vol: float, realized_vol: float) -> Dict:
+    """
+    Analyze the relationship between implied and realized volatility.
+    
+    Volatility Skew Explanation:
+    --------------------------
+    The relationship between implied volatility (IV) and realized volatility (RV) can provide
+    insights into whether options are overpriced or underpriced:
+    
+    1. IV > RV (Positive Skew):
+       - Option's implied volatility is higher than its actual historical volatility
+       - This suggests the option may be overpriced
+       - Common in high-fear environments or before earnings
+       - Potential strategies: Sell premium (covered calls, cash-secured puts)
+    
+    2. IV < RV (Negative Skew):
+       - Option's implied volatility is lower than its actual historical volatility
+       - This suggests the option may be underpriced
+       - Common after a period of low volatility followed by increased activity
+       - Potential strategies: Buy options (calls or puts depending on direction)
+    
+    3. IV ≈ RV (Neutral):
+       - Option is priced fairly relative to its actual price movements
+       - No clear mispricing signal
+       - Consider other factors for trading decisions
+    
+    Note: This analysis compares the option's implied volatility with its own realized volatility,
+    not with the underlying stock's volatility. This provides a more direct comparison of whether
+    the option itself is overpriced or underpriced.
+    
+    Args:
+        implied_vol: Option's implied volatility as a decimal (e.g., 0.25 for 25%)
+        realized_vol: Option's realized volatility as a decimal (e.g., 0.20 for 20%)
+        
+    Returns:
+        Dictionary containing volatility analysis
+    """
+    try:
+        # Calculate volatility skew (difference between IV and RV)
+        skew = implied_vol - realized_vol
+        
+        # Determine skew type and interpretation
+        analysis = {
+            'implied_volatility': implied_vol,
+            'realized_volatility': realized_vol,
+            'skew': skew,
+            'skew_type': 'neutral',
+            'interpretation': 'No significant volatility skew detected',
+            'buying_strategies': [],
+            'selling_strategies': []
+        }
+        
+        # Define significant skew threshold (5 percentage points)
+        significant_skew = 0.05
+        
+        if abs(skew) > significant_skew:
+            if skew > 0:
+                # Positive skew: IV > RV
+                analysis['skew_type'] = 'positive'
+                analysis['interpretation'] = 'Positive volatility skew: Option is priced with higher volatility than its actual price movements, suggesting it may be overpriced'
+                analysis['selling_strategies'] = [
+                    'Sell covered calls if you own the stock',
+                    'Write cash-secured puts if you want to potentially buy the stock at a lower price',
+                    'Sell premium through credit spreads'
+                ]
+            else:
+                # Negative skew: IV < RV
+                analysis['skew_type'] = 'negative'
+                analysis['interpretation'] = 'Negative volatility skew: Option is priced with lower volatility than its actual price movements, suggesting it may be underpriced'
+                analysis['buying_strategies'] = [
+                    'Buy calls if you expect the stock to rise',
+                    'Buy puts if you expect the stock to fall',
+                    'Consider debit spreads to reduce cost while maintaining directional exposure'
+                ]
+        
+        return analysis
+        
+    except Exception as e:
+        logger.error(f"Error analyzing volatility skew: {str(e)}")
+        return {
+            'implied_volatility': implied_vol,
+            'realized_volatility': realized_vol,
+            'skew': 0.0,
+            'skew_type': 'error',
+            'interpretation': 'Error analyzing volatility skew',
             'buying_strategies': [],
             'selling_strategies': []
         } 
